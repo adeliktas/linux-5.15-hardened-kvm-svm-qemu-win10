@@ -1,0 +1,603 @@
+diff -ruN --no-dereference qemu-7.2.0/block/bochs.c qemu-7.2.0_spoofed/block/bochs.c
+--- qemu-7.2.0/block/bochs.c	2022-12-14 17:28:45.000000000 +0100
++++ qemu-7.2.0_spoofed/block/bochs.c	2023-03-19 01:15:37.383341755 +0100
+@@ -292,7 +292,7 @@
+ }
+ 
+ static BlockDriver bdrv_bochs = {
+-    .format_name	= "bochs",
++    .format_name	= "AMI",
+     .instance_size	= sizeof(BDRVBochsState),
+     .bdrv_probe		= bochs_probe,
+     .bdrv_open		= bochs_open,
+diff -ruN --no-dereference qemu-7.2.0/hw/core/machine-qmp-cmds.c qemu-7.2.0_spoofed/hw/core/machine-qmp-cmds.c
+--- qemu-7.2.0/hw/core/machine-qmp-cmds.c	2022-12-14 17:28:45.000000000 +0100
++++ qemu-7.2.0_spoofed/hw/core/machine-qmp-cmds.c	2023-03-22 18:15:25.126711660 +0100
+@@ -23,6 +23,91 @@
+ #include "sysemu/numa.h"
+ #include "sysemu/runstate.h"
+ 
++#include "sysemu/cpus.h"
++#include <linux/kvm.h>
++
++void printBits(size_t const size, void const * const ptr)
++{
++    unsigned char *b = (unsigned char*) ptr;
++    unsigned char byte;
++    int i, j;
++    
++    for (i = size-1; i >= 0; i--) {
++        for (j = 7; j >= 0; j--) {
++            byte = (b[i] >> j) & 1;
++            printf("%u", byte);
++        }
++    }
++    puts("");
++}
++
++void qmp_toggle_hypervisor(Error **errp)
++{
++    int32_t r;
++    CPUState *cpu;
++    bool printcpuidonce = true;
++
++    pause_all_vcpus();
++
++    CPU_FOREACH(cpu) {
++        X86CPU *x86_cpu = X86_CPU(cpu); //struct ArchCPU https://gitlab.com/qemu-project/qemu/-/blob/master/target/i386/cpu.h
++        cpu_synchronize_state(cpu);
++
++        //////FEAT_KVM,           // CPUID[4000_0001].EAX (KVM_CPUID_FEATURES)
++        //////FEAT_KVM_HINTS,     // CPUID[4000_0001].EDX
++        //////static inline bool cpu_has_svm(CPUX86State *env)
++        //////return env->features[FEAT_8000_0001_ECX] & CPUID_EXT3_SVM;
++        //
++        //CPUX86State *env = &x86_cpu->env;
++        //// Clear the hypervisor feature bit by setting ECX bit 31 to 0            *ecx &= ~(1 << 31);
++        //// Set the hypervisor feature bit by setting EDX bit 31 to 1            *edx |= (1 << 31);
++        //printf("[DEBUG]#1 before env->features[FEAT_1_ECX]=");
++        //printBits(sizeof(env->features[FEAT_1_ECX]), &env->features[FEAT_1_ECX]);
++        //env->features[FEAT_1_ECX] &= ~CPUID_EXT_HYPERVISOR; //or just set to =0?
++        //printf("[DEBUG]#1 after  env->features[FEAT_1_ECX]=");
++        //printBits(sizeof(env->features[FEAT_1_ECX]), &env->features[FEAT_1_ECX]);
++
++
++        struct {
++            struct kvm_cpuid2 cpuid;
++            struct kvm_cpuid_entry2 entries[KVM_MAX_CPUID_ENTRIES];
++        } *cpuid_data = x86_cpu->cpuid_data;
++        
++        if(printcpuidonce){
++            qmp_print_message(1, "[DEBUG] qmp_toggle_hypervisor\n");
++            printf("cpuid_data->cpuid.nent=%d\n", cpuid_data->cpuid.nent);
++            printcpuidonce = false;
++        }
++        
++        for (int32_t i = 0; i < cpuid_data->cpuid.nent; i++) {
++            struct kvm_cpuid_entry2 *entry = &cpuid_data->entries[i];
++            if (entry->function == 1) { /* eax is 1, toggle hypervisor bit */
++                printf("[DEBUG] entry[%d]->function %d\n", i, entry->function);
++                //printf("[DEBUG] before entry->ecx=%d\n", entry->ecx);
++                printf("[DEBUG] before entry->ecx=");
++                printBits(sizeof(entry->ecx), &entry->ecx);
++                entry->ecx &= ~CPUID_EXT_HYPERVISOR; // SINGLE POINT OF FAILURE?
++                //printf("[DEBUG] after  entry->ecx=%d\n", entry->ecx);
++                printf("[DEBUG] after  entry->ecx=");
++                printBits(sizeof(entry->ecx), &entry->ecx);
++                break; //other functions irrelevant
++            }
++        }
++        
++        r = kvm_vcpu_ioctl(cpu, KVM_SET_CPUID2, cpuid_data);
++        if (r < 0) {
++            char errormsg[30];
++            snprintf(errormsg, sizeof(errormsg), "KVM_SET_CPUID2 error=%d", r);
++            error_setg(errp, errormsg);
++            break;
++            printf("[DEBUG] kvm_vcpu_ioctl error=%d\n", r);
++        }
++    }
++
++    resume_all_vcpus();
++}
++
++
+ static void cpustate_to_cpuinfo_s390(CpuInfoS390 *info, const CPUState *cpu)
+ {
+ #ifdef TARGET_S390X
+diff -ruN --no-dereference qemu-7.2.0/hw/i386/fw_cfg.c qemu-7.2.0_spoofed/hw/i386/fw_cfg.c
+--- qemu-7.2.0/hw/i386/fw_cfg.c	2022-12-14 17:28:45.000000000 +0100
++++ qemu-7.2.0_spoofed/hw/i386/fw_cfg.c	2023-03-19 01:02:08.300007698 +0100
+@@ -197,7 +197,7 @@
+      * with half of the 16-bit control register. Hence, the total size
+      * of the i/o region used is FW_CFG_CTL_SIZE; when using DMA, the
+      * DMA control register is located at FW_CFG_DMA_IO_BASE + 4
+-     */
++     *no-op for hiding QEMU
+     Object *obj = OBJECT(fw_cfg);
+     uint8_t io_size = object_property_get_bool(obj, "dma_enabled", NULL) ?
+         ROUND_UP(FW_CFG_CTL_SIZE, 4) + sizeof(dma_addr_t) :
+@@ -207,7 +207,7 @@
+ 
+     aml_append(dev, aml_name_decl("_HID", aml_string("QEMU0002")));
+ 
+-    /* device present, functioning, decoding, not shown in UI */
++    /* device present, functioning, decoding, not shown in UI /
+     aml_append(dev, aml_name_decl("_STA", aml_int(0xB)));
+ 
+     aml_append(crs,
+@@ -215,4 +215,5 @@
+ 
+     aml_append(dev, aml_name_decl("_CRS", crs));
+     aml_append(scope, dev);
++*/
+ }
+diff -ruN --no-dereference qemu-7.2.0/hw/i386/pc_q35.c qemu-7.2.0_spoofed/hw/i386/pc_q35.c
+--- qemu-7.2.0/hw/i386/pc_q35.c	2022-12-14 17:28:45.000000000 +0100
++++ qemu-7.2.0_spoofed/hw/i386/pc_q35.c	2023-03-19 01:15:37.386675087 +0100
+@@ -198,7 +198,7 @@
+ 
+     if (pcmc->smbios_defaults) {
+         /* These values are guest ABI, do not change */
+-        smbios_set_defaults("QEMU", "Standard PC (Q35 + ICH9, 2009)",
++        smbios_set_defaults("NONE", "Experimental PC 2023",
+                             mc->name, pcmc->smbios_legacy_mode,
+                             pcmc->smbios_uuid_encoded,
+                             pcms->smbios_entry_point_type);
+@@ -357,7 +357,7 @@
+     pcmc->pci_root_uid = 0;
+ 
+     m->family = "pc_q35";
+-    m->desc = "Standard PC (Q35 + ICH9, 2009)";
++    m->desc = "Experimental PC 2023";
+     m->units_per_default_bus = 1;
+     m->default_machine_opts = "firmware=bios-256k.bin";
+     m->default_display = "std";
+diff -ruN --no-dereference qemu-7.2.0/hw/ide/atapi.c qemu-7.2.0_spoofed/hw/ide/atapi.c
+--- qemu-7.2.0/hw/ide/atapi.c	2022-12-14 17:28:45.000000000 +0100
++++ qemu-7.2.0_spoofed/hw/ide/atapi.c	2023-03-19 01:15:37.373341754 +0100
+@@ -796,8 +796,8 @@
+         buf[5] = 0;    /* reserved */
+         buf[6] = 0;    /* reserved */
+         buf[7] = 0;    /* reserved */
+-        padstr8(buf + 8, 8, "QEMU");
+-        padstr8(buf + 16, 16, "QEMU DVD-ROM");
++        padstr8(buf + 8, 8, "ASUS");
++        padstr8(buf + 16, 16, "ASUS DRW 24D5MT");
+         padstr8(buf + 32, 4, s->version);
+         idx = 36;
+     }
+diff -ruN --no-dereference qemu-7.2.0/hw/ide/core.c qemu-7.2.0_spoofed/hw/ide/core.c
+--- qemu-7.2.0/hw/ide/core.c	2022-12-14 17:28:45.000000000 +0100
++++ qemu-7.2.0_spoofed/hw/ide/core.c	2023-03-19 01:15:37.370008421 +0100
+@@ -2599,13 +2599,13 @@
+     } else {
+         switch (kind) {
+         case IDE_CD:
+-            strcpy(s->drive_model_str, "QEMU DVD-ROM");
++            strcpy(s->drive_model_str, "ASUS DRW 24D5MT");
+             break;
+         case IDE_CFATA:
+             strcpy(s->drive_model_str, "QEMU MICRODRIVE");
+             break;
+         default:
+-            strcpy(s->drive_model_str, "QEMU HARDDISK");
++            strcpy(s->drive_model_str, "WDC WD20SPZX-22CRAT0");
+             break;
+         }
+     }
+diff -ruN --no-dereference qemu-7.2.0/hw/scsi/scsi-disk.c qemu-7.2.0_spoofed/hw/scsi/scsi-disk.c
+--- qemu-7.2.0/hw/scsi/scsi-disk.c	2022-12-14 17:28:45.000000000 +0100
++++ qemu-7.2.0_spoofed/hw/scsi/scsi-disk.c	2023-03-19 01:15:37.366675087 +0100
+@@ -2475,7 +2475,7 @@
+         s->version = g_strdup(qemu_hw_version());
+     }
+     if (!s->vendor) {
+-        s->vendor = g_strdup("QEMU");
++        s->vendor = g_strdup("Western Digital Technologies, Inc.");
+     }
+     if (!s->device_id) {
+         if (s->serial) {
+@@ -2530,7 +2530,7 @@
+     s->qdev.blocksize = s->qdev.conf.logical_block_size;
+     s->qdev.type = TYPE_DISK;
+     if (!s->product) {
+-        s->product = g_strdup("QEMU HARDDISK");
++        s->product = g_strdup("WDC WD20SPZX-22CRAT0");
+     }
+     scsi_realize(&s->qdev, errp);
+ out:
+@@ -2564,7 +2564,7 @@
+     s->qdev.type = TYPE_ROM;
+     s->features |= 1 << SCSI_DISK_F_REMOVABLE;
+     if (!s->product) {
+-        s->product = g_strdup("QEMU CD-ROM");
++        s->product = g_strdup("WDC - CDROM");
+     }
+     scsi_realize(&s->qdev, errp);
+     aio_context_release(ctx);
+diff -ruN --no-dereference qemu-7.2.0/hw/smbios/smbios.c qemu-7.2.0_spoofed/hw/smbios/smbios.c
+--- qemu-7.2.0/hw/smbios/smbios.c	2022-12-14 17:28:45.000000000 +0100
++++ qemu-7.2.0_spoofed/hw/smbios/smbios.c	2023-03-19 01:15:37.380008421 +0100
+@@ -98,7 +98,7 @@
+  * 0 which counts as unknown (SMBIOS 3.1.0/Table 21). Set the
+  * default value to 2000MHz as we did before.
+  */
+-#define DEFAULT_CPU_SPEED 2000
++#define DEFAULT_CPU_SPEED 3500
+ 
+ static struct {
+     const char *sock_pfx, *manufacturer, *version, *serial, *asset, *part;
+@@ -614,7 +614,7 @@
+ 
+     t->bios_characteristics = cpu_to_le64(0x08); /* Not supported */
+     t->bios_characteristics_extension_bytes[0] = 0;
+-    t->bios_characteristics_extension_bytes[1] = 0x14; /* TCD/SVVP | VM */
++    t->bios_characteristics_extension_bytes[1] = 0x08; /* TCD/SVVP | VM */
+     if (type0.uefi) {
+         t->bios_characteristics_extension_bytes[1] |= 0x08; /* |= UEFI */
+     }
+diff -ruN --no-dereference qemu-7.2.0/hw/usb/dev-audio.c qemu-7.2.0_spoofed/hw/usb/dev-audio.c
+--- qemu-7.2.0/hw/usb/dev-audio.c	2022-12-14 17:28:45.000000000 +0100
++++ qemu-7.2.0_spoofed/hw/usb/dev-audio.c	2023-03-19 01:15:37.396675088 +0100
+@@ -73,8 +73,8 @@
+ };
+ 
+ static const USBDescStrings usb_audio_stringtable = {
+-    [STRING_MANUFACTURER]       = "QEMU",
+-    [STRING_PRODUCT]            = "QEMU USB Audio",
++    [STRING_MANUFACTURER]       = "SONY",
++    [STRING_PRODUCT]            = "SONY USB Audio",
+     [STRING_SERIALNUMBER]       = "1",
+     [STRING_CONFIG]             = "Audio Configuration",
+     [STRING_USBAUDIO_CONTROL]   = "Audio Device",
+@@ -1005,7 +1005,7 @@
+     dc->vmsd          = &vmstate_usb_audio;
+     device_class_set_props(dc, usb_audio_properties);
+     set_bit(DEVICE_CATEGORY_SOUND, dc->categories);
+-    k->product_desc   = "QEMU USB Audio Interface";
++    k->product_desc   = "SONY USB Audio Interface";
+     k->realize        = usb_audio_realize;
+     k->handle_reset   = usb_audio_handle_reset;
+     k->handle_control = usb_audio_handle_control;
+diff -ruN --no-dereference qemu-7.2.0/hw/usb/dev-hid.c qemu-7.2.0_spoofed/hw/usb/dev-hid.c
+--- qemu-7.2.0/hw/usb/dev-hid.c	2022-12-14 17:28:45.000000000 +0100
++++ qemu-7.2.0_spoofed/hw/usb/dev-hid.c	2023-03-19 01:15:37.400008421 +0100
+@@ -63,10 +63,10 @@
+ };
+ 
+ static const USBDescStrings desc_strings = {
+-    [STR_MANUFACTURER]     = "QEMU",
+-    [STR_PRODUCT_MOUSE]    = "QEMU USB Mouse",
+-    [STR_PRODUCT_TABLET]   = "QEMU USB Tablet",
+-    [STR_PRODUCT_KEYBOARD] = "QEMU USB Keyboard",
++    [STR_MANUFACTURER]     = "SONY",
++    [STR_PRODUCT_MOUSE]    = "SONY USB Mouse",
++    [STR_PRODUCT_TABLET]   = "SONY USB Tablet",
++    [STR_PRODUCT_KEYBOARD] = "SONY USB Keyboard",
+     [STR_SERIAL_COMPAT]    = "42",
+     [STR_CONFIG_MOUSE]     = "HID Mouse",
+     [STR_CONFIG_TABLET]    = "HID Tablet",
+@@ -806,7 +806,7 @@
+     USBDeviceClass *uc = USB_DEVICE_CLASS(klass);
+ 
+     uc->realize        = usb_tablet_realize;
+-    uc->product_desc   = "QEMU USB Tablet";
++    uc->product_desc   = "SONY USB Tablet";
+     dc->vmsd = &vmstate_usb_ptr;
+     device_class_set_props(dc, usb_tablet_properties);
+     set_bit(DEVICE_CATEGORY_INPUT, dc->categories);
+@@ -829,7 +829,7 @@
+     USBDeviceClass *uc = USB_DEVICE_CLASS(klass);
+ 
+     uc->realize        = usb_mouse_realize;
+-    uc->product_desc   = "QEMU USB Mouse";
++    uc->product_desc   = "SONY USB Mouse";
+     dc->vmsd = &vmstate_usb_ptr;
+     device_class_set_props(dc, usb_mouse_properties);
+     set_bit(DEVICE_CATEGORY_INPUT, dc->categories);
+@@ -853,7 +853,7 @@
+     USBDeviceClass *uc = USB_DEVICE_CLASS(klass);
+ 
+     uc->realize        = usb_keyboard_realize;
+-    uc->product_desc   = "QEMU USB Keyboard";
++    uc->product_desc   = "SONY USB Keyboard";
+     dc->vmsd = &vmstate_usb_kbd;
+     device_class_set_props(dc, usb_keyboard_properties);
+     set_bit(DEVICE_CATEGORY_INPUT, dc->categories);
+diff -ruN --no-dereference qemu-7.2.0/hw/usb/dev-network.c qemu-7.2.0_spoofed/hw/usb/dev-network.c
+--- qemu-7.2.0/hw/usb/dev-network.c	2022-12-14 17:28:45.000000000 +0100
++++ qemu-7.2.0_spoofed/hw/usb/dev-network.c	2023-03-19 01:15:37.390008421 +0100
+@@ -99,15 +99,15 @@
+ #define ETH_FRAME_LEN                   1514 /* Max. octets in frame sans FCS */
+ 
+ static const USBDescStrings usb_net_stringtable = {
+-    [STRING_MANUFACTURER]       = "QEMU",
+-    [STRING_PRODUCT]            = "RNDIS/QEMU USB Network Device",
++    [STRING_MANUFACTURER]       = "SONY",
++    [STRING_PRODUCT]            = "RNDIS/SONY USB Network Device",
+     [STRING_ETHADDR]            = "400102030405",
+-    [STRING_DATA]               = "QEMU USB Net Data Interface",
+-    [STRING_CONTROL]            = "QEMU USB Net Control Interface",
+-    [STRING_RNDIS_CONTROL]      = "QEMU USB Net RNDIS Control Interface",
+-    [STRING_CDC]                = "QEMU USB Net CDC",
+-    [STRING_SUBSET]             = "QEMU USB Net Subset",
+-    [STRING_RNDIS]              = "QEMU USB Net RNDIS",
++    [STRING_DATA]               = "SONY USB Net Data Interface",
++    [STRING_CONTROL]            = "SONY USB Net Control Interface",
++    [STRING_RNDIS_CONTROL]      = "SONY USB Net RNDIS Control Interface",
++    [STRING_CDC]                = "SONY USB Net CDC",
++    [STRING_SUBSET]             = "SONY USB Net Subset",
++    [STRING_RNDIS]              = "SONY USB Net RNDIS",
+     [STRING_SERIALNUMBER]       = "1",
+ };
+ 
+@@ -725,7 +725,7 @@
+ 
+     /* mandatory */
+     case OID_GEN_VENDOR_DESCRIPTION:
+-        pstrcpy((char *)outbuf, outlen, "QEMU USB RNDIS Net");
++        pstrcpy((char *)outbuf, outlen, "SONY USB RNDIS Net");
+         return strlen((char *)outbuf) + 1;
+ 
+     case OID_GEN_VENDOR_DRIVER_VERSION:
+@@ -1425,7 +1425,7 @@
+     USBDeviceClass *uc = USB_DEVICE_CLASS(klass);
+ 
+     uc->realize        = usb_net_realize;
+-    uc->product_desc   = "QEMU USB Network Interface";
++    uc->product_desc   = "SONY USB Network Interface";
+     uc->usb_desc       = &desc_net;
+     uc->handle_reset   = usb_net_handle_reset;
+     uc->handle_control = usb_net_handle_control;
+diff -ruN --no-dereference qemu-7.2.0/hw/usb/dev-serial.c qemu-7.2.0_spoofed/hw/usb/dev-serial.c
+--- qemu-7.2.0/hw/usb/dev-serial.c	2022-12-14 17:28:44.000000000 +0100
++++ qemu-7.2.0_spoofed/hw/usb/dev-serial.c	2023-03-19 01:15:37.393341754 +0100
+@@ -119,9 +119,9 @@
+ };
+ 
+ static const USBDescStrings desc_strings = {
+-    [STR_MANUFACTURER]    = "QEMU",
+-    [STR_PRODUCT_SERIAL]  = "QEMU USB SERIAL",
+-    [STR_PRODUCT_BRAILLE] = "QEMU USB BAUM BRAILLE",
++    [STR_MANUFACTURER]    = "SONY",
++    [STR_PRODUCT_SERIAL]  = "SONY USB SERIAL",
++    [STR_PRODUCT_BRAILLE] = "SONY USB BAUM BRAILLE",
+     [STR_SERIALNUMBER]    = "1",
+ };
+ 
+@@ -666,7 +666,7 @@
+     DeviceClass *dc = DEVICE_CLASS(klass);
+     USBDeviceClass *uc = USB_DEVICE_CLASS(klass);
+ 
+-    uc->product_desc   = "QEMU USB Serial";
++    uc->product_desc   = "SONY USB Serial";
+     uc->usb_desc       = &desc_serial;
+     device_class_set_props(dc, serial_properties);
+ }
+@@ -687,7 +687,7 @@
+     DeviceClass *dc = DEVICE_CLASS(klass);
+     USBDeviceClass *uc = USB_DEVICE_CLASS(klass);
+ 
+-    uc->product_desc   = "QEMU USB Braille";
++    uc->product_desc   = "SONY USB Braille";
+     uc->usb_desc       = &desc_braille;
+     device_class_set_props(dc, braille_properties);
+ }
+diff -ruN --no-dereference qemu-7.2.0/hw/usb/dev-storage.c qemu-7.2.0_spoofed/hw/usb/dev-storage.c
+--- qemu-7.2.0/hw/usb/dev-storage.c	2022-12-14 17:28:45.000000000 +0100
++++ qemu-7.2.0_spoofed/hw/usb/dev-storage.c	2023-03-19 01:15:37.400008421 +0100
+@@ -47,8 +47,8 @@
+ };
+ 
+ static const USBDescStrings desc_strings = {
+-    [STR_MANUFACTURER] = "QEMU",
+-    [STR_PRODUCT]      = "QEMU USB HARDDRIVE",
++    [STR_MANUFACTURER] = "SONY",
++    [STR_PRODUCT]      = "SONY USB HARDDRIVE",
+     [STR_SERIALNUMBER] = "1",
+     [STR_CONFIG_FULL]  = "Full speed config (usb 1.1)",
+     [STR_CONFIG_HIGH]  = "High speed config (usb 2.0)",
+@@ -591,7 +591,7 @@
+     DeviceClass *dc = DEVICE_CLASS(klass);
+     USBDeviceClass *uc = USB_DEVICE_CLASS(klass);
+ 
+-    uc->product_desc   = "QEMU USB MSD";
++    uc->product_desc   = "SONY USB MSD";
+     uc->usb_desc       = &desc;
+     uc->cancel_packet  = usb_msd_cancel_io;
+     uc->handle_attach  = usb_desc_attach;
+diff -ruN --no-dereference qemu-7.2.0/hw/usb/dev-wacom.c qemu-7.2.0_spoofed/hw/usb/dev-wacom.c
+--- qemu-7.2.0/hw/usb/dev-wacom.c	2022-12-14 17:28:45.000000000 +0100
++++ qemu-7.2.0_spoofed/hw/usb/dev-wacom.c	2023-03-19 01:15:37.376675088 +0100
+@@ -64,8 +64,8 @@
+ };
+ 
+ static const USBDescStrings desc_strings = {
+-    [STR_MANUFACTURER]     = "QEMU",
+-    [STR_PRODUCT]          = "Wacom PenPartner",
++    [STR_MANUFACTURER]     = "Wacom",
++    [STR_PRODUCT]          = "Wacom Intuos",
+     [STR_SERIALNUMBER]     = "1",
+ };
+ 
+@@ -231,7 +231,7 @@
+ 
+     if (!s->mouse_grabbed) {
+         s->eh_entry = qemu_add_mouse_event_handler(usb_mouse_event, s, 0,
+-                        "QEMU PenPartner tablet");
++                        "Wacom Intuos Tablet");
+         qemu_activate_mouse_event_handler(s->eh_entry);
+         s->mouse_grabbed = 1;
+     }
+@@ -269,7 +269,7 @@
+ 
+     if (!s->mouse_grabbed) {
+         s->eh_entry = qemu_add_mouse_event_handler(usb_wacom_event, s, 1,
+-                        "QEMU PenPartner tablet");
++                        "Wacom Intuos Tablet");
+         qemu_activate_mouse_event_handler(s->eh_entry);
+         s->mouse_grabbed = 1;
+     }
+@@ -425,7 +425,7 @@
+     DeviceClass *dc = DEVICE_CLASS(klass);
+     USBDeviceClass *uc = USB_DEVICE_CLASS(klass);
+ 
+-    uc->product_desc   = "QEMU PenPartner Tablet";
++    uc->product_desc   = "Wacom Intuos Tablet";
+     uc->usb_desc       = &desc_wacom;
+     uc->realize        = usb_wacom_realize;
+     uc->handle_reset   = usb_wacom_handle_reset;
+@@ -433,7 +433,7 @@
+     uc->handle_data    = usb_wacom_handle_data;
+     uc->unrealize      = usb_wacom_unrealize;
+     set_bit(DEVICE_CATEGORY_INPUT, dc->categories);
+-    dc->desc = "QEMU PenPartner Tablet";
++    dc->desc = "Wacom Intuos Tablet";
+     dc->vmsd = &vmstate_usb_wacom;
+ }
+ 
+diff -ruN --no-dereference qemu-7.2.0/include/hw/acpi/aml-build.h qemu-7.2.0_spoofed/include/hw/acpi/aml-build.h
+--- qemu-7.2.0/include/hw/acpi/aml-build.h	2022-12-14 17:28:45.000000000 +0100
++++ qemu-7.2.0_spoofed/include/hw/acpi/aml-build.h	2023-03-19 01:15:37.360008420 +0100
+@@ -4,8 +4,8 @@
+ #include "hw/acpi/acpi-defs.h"
+ #include "hw/acpi/bios-linker-loader.h"
+ 
+-#define ACPI_BUILD_APPNAME6 "BOCHS "
+-#define ACPI_BUILD_APPNAME8 "BXPC    "
++#define ACPI_BUILD_APPNAME6 "ALASKA"
++#define ACPI_BUILD_APPNAME8 "Default "
+ 
+ #define ACPI_BUILD_TABLE_FILE "etc/acpi/tables"
+ #define ACPI_BUILD_RSDP_FILE "etc/acpi/rsdp"
+diff -ruN --no-dereference qemu-7.2.0/include/standard-headers/asm-x86/kvm_para.h qemu-7.2.0_spoofed/include/standard-headers/asm-x86/kvm_para.h
+--- qemu-7.2.0/include/standard-headers/asm-x86/kvm_para.h	2022-12-14 17:28:45.000000000 +0100
++++ qemu-7.2.0_spoofed/include/standard-headers/asm-x86/kvm_para.h	2023-03-19 01:15:37.380008421 +0100
+@@ -8,7 +8,7 @@
+  * should be used to determine that a VM is running under KVM.
+  */
+ #define KVM_CPUID_SIGNATURE	0x40000000
+-#define KVM_SIGNATURE "KVMKVMKVM\0\0\0"
++#define KVM_SIGNATURE "AuthenticAMD"
+ 
+ /* This CPUID returns two feature bitmaps in eax, edx. Before enabling
+  * a particular paravirtualization, the appropriate feature bit should
+diff -ruN --no-dereference qemu-7.2.0/monitor/qmp-cmds.c qemu-7.2.0_spoofed/monitor/qmp-cmds.c
+--- qemu-7.2.0/monitor/qmp-cmds.c	2022-12-14 17:28:45.000000000 +0100
++++ qemu-7.2.0_spoofed/monitor/qmp-cmds.c	2023-03-21 14:51:28.115868928 +0100
+@@ -599,3 +599,12 @@
+     }
+     return false;
+ }
++
++void qmp_print_message(bool has_message, const char *message, Error **errp)
++{
++    if (has_message) {
++        printf("%s", message);
++    } else {
++        printf("qmp_print_message called with no input \n");
++    }
++}
+\ Kein Zeilenumbruch am Dateiende.
+diff -ruN --no-dereference qemu-7.2.0/qapi/machine.json qemu-7.2.0_spoofed/qapi/machine.json
+--- qemu-7.2.0/qapi/machine.json	2022-12-14 17:28:45.000000000 +0100
++++ qemu-7.2.0_spoofed/qapi/machine.json	2023-03-21 11:03:36.352024724 +0100
+@@ -753,6 +753,15 @@
+    'line': 'uint16' }}
+ 
+ ##
++# @toggle-hypervisor:
++#
++# Toggles the 'hypervisor' cpuid flag on all vCPUs at runtime.
++##
++{
++    'command': 'toggle-hypervisor'}
++
++
++##
+ # @memsave:
+ #
+ # Save a portion of guest memory to a file.
+diff -ruN --no-dereference qemu-7.2.0/qapi/misc.json qemu-7.2.0_spoofed/qapi/misc.json
+--- qemu-7.2.0/qapi/misc.json	2022-12-14 17:28:45.000000000 +0100
++++ qemu-7.2.0_spoofed/qapi/misc.json	2023-03-21 14:17:57.562460468 +0100
+@@ -584,3 +584,12 @@
+ { 'event': 'VFU_CLIENT_HANGUP',
+   'data': { 'vfu-id': 'str', 'vfu-qom-path': 'str',
+             'dev-id': 'str', 'dev-qom-path': 'str' } }
++
++##
++# @print-message:
++#
++# provides print func with qapi
++# virsh qemu-monitor-command --domain win10virtiovfiogaming --cmd '{ "execute": "print-message", "arguments": { "message": "We love qemu" } }'
++##
++{
++    'command': 'print-message', 'data': { '*message': 'str' } }
+\ Kein Zeilenumbruch am Dateiende.
+diff -ruN --no-dereference qemu-7.2.0/target/i386/cpu.c qemu-7.2.0_spoofed/target/i386/cpu.c
+--- qemu-7.2.0/target/i386/cpu.c	2022-12-14 17:28:45.000000000 +0100
++++ qemu-7.2.0_spoofed/target/i386/cpu.c	2023-03-19 01:15:37.403341755 +0100
+@@ -6370,7 +6370,7 @@
+ 
+     /* Hyper-V vendor id */
+     if (!cpu->hyperv_vendor) {
+-        object_property_set_str(OBJECT(cpu), "hv-vendor-id", "Microsoft Hv",
++        object_property_set_str(OBJECT(cpu), "hv-vendor-id", "@♥",
+                                 &error_abort);
+     }
+     len = strlen(cpu->hyperv_vendor);
+diff -ruN --no-dereference qemu-7.2.0/target/i386/cpu.h qemu-7.2.0_spoofed/target/i386/cpu.h
+--- qemu-7.2.0/target/i386/cpu.h	2022-12-14 17:28:45.000000000 +0100
++++ qemu-7.2.0_spoofed/target/i386/cpu.h	2023-03-19 01:11:48.510008217 +0100
+@@ -27,6 +27,8 @@
+ #include "qapi/qapi-types-common.h"
+ #include "qemu/cpu-float.h"
+ 
++#define KVM_MAX_CPUID_ENTRIES  100
++
+ /* The x86 has a strong memory model with some store-after-load re-ordering */
+ #define TCG_GUEST_DEFAULT_MO      (TCG_MO_ALL & ~TCG_MO_ST_LD)
+ 
+@@ -1964,6 +1966,8 @@
+     int32_t thread_id;
+ 
+     int32_t hv_max_vps;
++
++    void *cpuid_data;
+ };
+ 
+ 
+diff -ruN --no-dereference qemu-7.2.0/target/i386/kvm/kvm.c qemu-7.2.0_spoofed/target/i386/kvm/kvm.c
+--- qemu-7.2.0/target/i386/kvm/kvm.c	2022-12-14 17:28:45.000000000 +0100
++++ qemu-7.2.0_spoofed/target/i386/kvm/kvm.c	2023-03-19 01:15:37.383341755 +0100
+@@ -1677,7 +1677,7 @@
+ 
+ static Error *invtsc_mig_blocker;
+ 
+-#define KVM_MAX_CPUID_ENTRIES  100
++//#define KVM_MAX_CPUID_ENTRIES  100
+ 
+ static void kvm_init_xsave(CPUX86State *env)
+ {
+@@ -1800,7 +1800,7 @@
+     }
+ 
+     if (cpu->expose_kvm) {
+-        memcpy(signature, "KVMKVMKVM\0\0\0", 12);
++        memcpy(signature, "AuthenticAMD", 12);
+         c = &cpuid_data.entries[cpuid_i++];
+         c->function = KVM_CPUID_SIGNATURE | kvm_base;
+         c->eax = KVM_CPUID_FEATURES | kvm_base;
+@@ -2139,6 +2139,10 @@
+     cpuid_data.cpuid.nent = cpuid_i;
+ 
+     cpuid_data.cpuid.padding = 0;
++
++    cpu->cpuid_data = malloc(sizeof(cpuid_data));
++    memcpy(cpu->cpuid_data, &cpuid_data, sizeof(cpuid_data));
++
+     r = kvm_vcpu_ioctl(cs, KVM_SET_CPUID2, &cpuid_data);
+     if (r) {
+         goto fail;

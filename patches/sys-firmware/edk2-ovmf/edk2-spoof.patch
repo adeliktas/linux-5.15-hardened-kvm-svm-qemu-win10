@@ -1,0 +1,68 @@
+diff -ruN --no-dereference edk2-edk2-stable202202/MdeModulePkg/MdeModulePkg.dec edk2-edk2-stable202202_spoofed/MdeModulePkg/MdeModulePkg.dec
+--- edk2-edk2-stable202202/MdeModulePkg/MdeModulePkg.dec	2022-02-21 16:19:40.000000000 +0100
++++ edk2-edk2-stable202202_spoofed/MdeModulePkg/MdeModulePkg.dec	2023-03-19 00:33:20.586672823 +0100
+@@ -1703,7 +1703,7 @@
+ 
+   ## Null-terminated Unicode string of the firmware vendor name that is the default name filled into the EFI System Table.
+   # @Prompt Firmware vendor.
+-  gEfiMdeModulePkgTokenSpaceGuid.PcdFirmwareVendor|L"EDK II"|VOID*|0x00010050
++  gEfiMdeModulePkgTokenSpaceGuid.PcdFirmwareVendor|L"American Megatrends International, LLC."|VOID*|0x00010050
+ 
+   ## Firmware revision that is the default revision filled into the EFI System Table.
+   # @Prompt Firmware revision.
+@@ -1938,8 +1938,8 @@
+   #  defining a definition block to distinguish definition block functions.
+   #  The OEM assigns each dissimilar table a new OEM Table ID.
+   #  This PCD is ignored for definition block.
+-  # @Prompt Default OEM Table ID for ACPI table creation.
+-  gEfiMdeModulePkgTokenSpaceGuid.PcdAcpiDefaultOemTableId|0x20202020324B4445|UINT64|0x30001035
++  # @Prompt Default OEM Table ID for ACPI table creation. #OPENCORE
++  gEfiMdeModulePkgTokenSpaceGuid.PcdAcpiDefaultOemTableId|0x45524F434E45504F|UINT64|0x30001035
+ 
+   ## Default OEM Revision for ACPI table creation.
+   #  According to ACPI specification, for LoadTable() opcode, the OS can also
+diff -ruN --no-dereference edk2-edk2-stable202202/OvmfPkg/Bhyve/AcpiTables/Platform.h edk2-edk2-stable202202_spoofed/OvmfPkg/Bhyve/AcpiTables/Platform.h
+--- edk2-edk2-stable202202/OvmfPkg/Bhyve/AcpiTables/Platform.h	2022-02-21 16:19:40.000000000 +0100
++++ edk2-edk2-stable202202_spoofed/OvmfPkg/Bhyve/AcpiTables/Platform.h	2023-03-19 00:38:33.306673102 +0100
+@@ -20,10 +20,10 @@
+ //
+ // ACPI table information used to initialize tables.
+ //
+-#define EFI_ACPI_OEM_ID            'B','H','Y','V','E',' '  // OEMID 6 bytes long
++#define EFI_ACPI_OEM_ID            'O','P','E','N','C','R'  // OEMID 6 bytes long
+ #define EFI_ACPI_OEM_REVISION      0x1
+-#define EFI_ACPI_CREATOR_ID        SIGNATURE_32('B','H','Y','V')
+-#define EFI_ACPI_CREATOR_REVISION  0x00000001
++#define EFI_ACPI_CREATOR_ID        SIGNATURE_32('O','P','E','N')
++#define EFI_ACPI_CREATOR_REVISION  0x00000539
+ 
+ #define INT_MODEL        0x01
+ #define SCI_INT_VECTOR   0x0009
+diff -ruN --no-dereference edk2-edk2-stable202202/OvmfPkg/SmbiosPlatformDxe/SmbiosPlatformDxe.c edk2-edk2-stable202202_spoofed/OvmfPkg/SmbiosPlatformDxe/SmbiosPlatformDxe.c
+--- edk2-edk2-stable202202/OvmfPkg/SmbiosPlatformDxe/SmbiosPlatformDxe.c	2022-02-21 16:19:40.000000000 +0100
++++ edk2-edk2-stable202202_spoofed/OvmfPkg/SmbiosPlatformDxe/SmbiosPlatformDxe.c	2023-03-19 00:42:59.483340007 +0100
+@@ -16,9 +16,9 @@
+ #include "SmbiosPlatformDxe.h"
+ 
+ #define TYPE0_STRINGS \
+-  "EFI Development Kit II / OVMF\0"     /* Vendor */ \
+-  "0.0.0\0"                             /* BiosVersion */ \
+-  "02/06/2015\0"                        /* BiosReleaseDate */
++  "American Megatrends Inc. EFI\0"     /* Vendor */ \
++  "5.3.9\0"                             /* BiosVersion */ \
++  "03/19/2023\0"                        /* BiosReleaseDate */
+ //
+ // Type definition and contents of the default Type 0 SMBIOS table.
+ //
+diff -ruN --no-dereference edk2-edk2-stable202202/ShellPkg/ShellPkg.dec edk2-edk2-stable202202_spoofed/ShellPkg/ShellPkg.dec
+--- edk2-edk2-stable202202/ShellPkg/ShellPkg.dec	2022-02-21 16:19:40.000000000 +0100
++++ edk2-edk2-stable202202_spoofed/ShellPkg/ShellPkg.dec	2023-03-17 08:57:45.626680204 +0100
+@@ -123,7 +123,7 @@
+   gEfiShellPkgTokenSpaceGuid.PcdShellScreenLogCount|3|UINT8|0x00000008
+ 
+   ## Unicode string of the shell supplier
+-  gEfiShellPkgTokenSpaceGuid.PcdShellSupplier|L"EDK II"|VOID*|0x00000010
++  gEfiShellPkgTokenSpaceGuid.PcdShellSupplier|L"American Megatrends International, LLC."|VOID*|0x00000010
+ 
+   ## Do extended decode of USB for determining media type
+   gEfiShellPkgTokenSpaceGuid.PcdUsbExtendedDecode|TRUE|BOOLEAN|0x00000011

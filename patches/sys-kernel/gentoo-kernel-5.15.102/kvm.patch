@@ -1,0 +1,139 @@
+diff -ruN --no-dereference linux-5.15/arch/x86/kvm/svm/svm.c linux-5.15_patched/arch/x86/kvm/svm/svm.c
+--- linux-5.15/arch/x86/kvm/svm/svm.c	2023-03-22 16:12:01.340047856 +0100
++++ linux-5.15_patched/arch/x86/kvm/svm/svm.c	2023-03-23 22:07:23.450008398 +0100
+@@ -46,6 +46,9 @@
+ #include "kvm_onhyperv.h"
+ #include "svm_onhyperv.h"
+ 
++//#include <linux/module.h>
++#include <linux/sysctl.h>
++
+ MODULE_AUTHOR("Qumranet");
+ MODULE_LICENSE("GPL");
+ 
+@@ -74,6 +77,11 @@
+ #define TSC_RATIO_MIN		0x0000000000000001ULL
+ #define TSC_RATIO_MAX		0x000000ffffffffffULL
+ 
++static u32 rdtsc_print_once = 1;
++static u32 rdtsc_timediffdivider = 22;
++static u32 rdtsc_timediffdividersecond = 10;
++static bool rdtsc_secondcall = false;
++
+ static bool erratum_383_found __read_mostly;
+ 
+ u32 msrpm_offsets[MSRPM_OFFSETS] __read_mostly;
+@@ -87,6 +95,34 @@
+ static DEFINE_PER_CPU(u64, current_tsc_ratio);
+ #define TSC_RATIO_DEFAULT	0x0100000000ULL
+ 
++static struct ctl_table rdtsc_sysctl_table[] = {
++    {
++        .procname = "rdtsc_print_once",
++        .data = &rdtsc_print_once,
++        .maxlen = sizeof(rdtsc_print_once),
++        .mode = 0644,
++        .proc_handler = &proc_dointvec,
++    },
++    {
++        .procname = "rdtsc_timediffdivider",
++        .data = &rdtsc_timediffdivider,
++        .maxlen = sizeof(rdtsc_timediffdivider),
++        .mode = 0644,
++        .proc_handler = &proc_dointvec,
++    },
++    {
++        .procname = "rdtsc_timediffdividersecond",
++        .data = &rdtsc_timediffdividersecond,
++        .maxlen = sizeof(rdtsc_timediffdividersecond),
++        .mode = 0644,
++        .proc_handler = &proc_dointvec,
++    },
++    
++    {}
++};
++
++static struct ctl_table_header *rdtsc_sysctl_table_header;
++
+ static const struct svm_direct_access_msrs {
+ 	u32 index;   /* Index of the MSR */
+ 	bool always; /* True if intercept is initially cleared */
+@@ -1228,6 +1264,7 @@
+ 	svm_set_intercept(svm, INTERCEPT_XSETBV);
+ 	svm_set_intercept(svm, INTERCEPT_RDPRU);
+ 	svm_set_intercept(svm, INTERCEPT_RSM);
++	svm_set_intercept(svm, INTERCEPT_RDTSC);
+ 
+ 	if (!kvm_mwait_in_guest(vcpu->kvm)) {
+ 		svm_set_intercept(svm, INTERCEPT_MONITOR);
+@@ -3077,6 +3114,46 @@
+ 	return kvm_handle_invpcid(vcpu, type, gva);
+ }
+ 
++static int svm_handle_rdtsc(struct kvm_vcpu *vcpu)
++{
++	static u64 rdtsc_fake = 0;
++	static u64 rdtsc_prev = 0;
++	u64 rdtsc_real = rdtsc();
++    
++    u64 fake_diff;
++
++	if(rdtsc_print_once){ //check if sysctl has control over it will print again in guest-kernel
++		printk("[handle_rdtsc] fake rdtsc svm function is working\n");
++		rdtsc_print_once = 0;
++		rdtsc_fake = rdtsc_real;
++	}
++
++	if(rdtsc_prev != 0)
++	{
++		if(rdtsc_real > rdtsc_prev)
++		{
++			u64 diff = rdtsc_real - rdtsc_prev;
++			// virtually the only difference between vmx and SVM, wtf ;_;
++            if(rdtsc_secondcall){
++                fake_diff =  diff / (rdtsc_timediffdivider/rdtsc_timediffdividersecond);//rdtsc_timediffdividersecond>=10 for locky
++            }
++            else{
++                fake_diff =  diff / rdtsc_timediffdivider; // if you have 3.2Ghz(less) on your vm, change 20 to 16
++            }
++			rdtsc_secondcall = !rdtsc_secondcall;
++			rdtsc_fake += fake_diff;
++		}
++	}
++	if(rdtsc_fake > rdtsc_real){
++		rdtsc_fake = rdtsc_real;
++	}
++	rdtsc_prev = rdtsc_real;
++	vcpu->arch.regs[VCPU_REGS_RAX] = rdtsc_fake & -1u;
++	vcpu->arch.regs[VCPU_REGS_RDX] = (rdtsc_fake >> 32) & -1u;
++
++	return kvm_skip_emulated_instruction(vcpu);
++}
++
+ static int (*const svm_exit_handlers[])(struct kvm_vcpu *vcpu) = {
+ 	[SVM_EXIT_READ_CR0]			= cr_interception,
+ 	[SVM_EXIT_READ_CR3]			= cr_interception,
+@@ -3149,6 +3226,7 @@
+ 	[SVM_EXIT_AVIC_INCOMPLETE_IPI]		= avic_incomplete_ipi_interception,
+ 	[SVM_EXIT_AVIC_UNACCELERATED_ACCESS]	= avic_unaccelerated_access_interception,
+ 	[SVM_EXIT_VMGEXIT]			= sev_handle_vmgexit,
++	[SVM_EXIT_RDTSC]			= svm_handle_rdtsc,
+ };
+ 
+ static void dump_vmcb(struct kvm_vcpu *vcpu)
+@@ -4708,6 +4786,7 @@
+ static int __init svm_init(void)
+ {
+ 	__unused_size_checks();
++	rdtsc_sysctl_table_header = register_sysctl_table(rdtsc_sysctl_table);
+ 
+ 	return kvm_init(&svm_init_ops, sizeof(struct vcpu_svm),
+ 			__alignof__(struct vcpu_svm), THIS_MODULE);
+@@ -4715,6 +4794,7 @@
+ 
+ static void __exit svm_exit(void)
+ {
++	unregister_sysctl_table(rdtsc_sysctl_table_header);
+ 	kvm_exit();
+ }
+ 
